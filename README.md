@@ -1,6 +1,6 @@
 # AgentGuard Go SDK
 
-Go client for the [AgentGuard OS](https://www.rakizattawasol.com/en/developers.html) enforcement gateway. Every protected action is decided by the gateway before it runs, and the SDK fails closed: if the gateway cannot be reached, the action must not run.
+Go client for the [AgentGuard OS](https://agentguard.rakizattawasol.com/site/en/developers.html) enforcement gateway. Every protected action is decided by the gateway before it runs, and the SDK fails closed: if the gateway cannot be reached, the action must not run.
 
 ```bash
 go get github.com/rakizat-tawasol/agentguard-go
