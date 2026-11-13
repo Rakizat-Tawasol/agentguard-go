@@ -32,6 +32,20 @@ func refund(ctx context.Context) error {
 }
 ```
 
+## Sessions, memory, retrieval and agent-to-agent calls
+
+```go
+g.NewSession("")                                             // one session per conversation or job run
+g.DeclareIntent(ctx, "refund order 7", "")                   // later actions are scored against the goal
+rec, err := g.MemoryWrite(ctx, "pref", "dark", "user", "")   // signed provenance record
+res, err := g.MemoryVerify(ctx, []agentguard.MemoryItem{{Record: rec, Value: "dark"}})
+docs, err := g.FilterDocuments(ctx, candidates, query)       // only what the on-behalf-of person may open
+ids, err := g.RAGPrincipals(ctx)                             // identities for vector-store ACL filters
+env, err := g.A2AEnvelope(ctx, "agt_billing", payload, 0)    // sign a message to another agent
+_, err = g.A2AVerify(ctx, env, payload)                      // ErrDenied when invalid or replayed
+proxy, err := g.ProxyURL(ctx, "http://agentguard-gateway:3128") // egress proxy; holds the token, do not log
+```
+
 ## Gateway URL
 
 The URL passed to `New` is used first. If it is empty, the SDK reads `AGENTGUARD_GATEWAY_URL`. If that is not set either, it uses the hosted gateway `https://agentguard-gateway.rakizattawasol.com`.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,78 @@ func TestResolveGatewayURL(t *testing.T) {
 	t.Setenv("AGENTGUARD_GATEWAY_URL", "")
 	if got := ResolveGatewayURL(""); got != "https://agentguard-gateway.rakizattawasol.com" {
 		t.Errorf("default: %q", got)
+	}
+}
+
+func TestRuntimeCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		reply := func(code int, v any) { w.WriteHeader(code); _ = json.NewEncoder(w).Encode(v) }
+		switch r.URL.Path {
+		case "/v1/intent":
+			if req["goal"] == "again" {
+				reply(409, map[string]any{"session_id": req["session_id"], "goal": "first"})
+				return
+			}
+			reply(200, map[string]any{"session_id": req["session_id"], "goal": req["goal"]})
+		case "/v1/memory/write":
+			if req["key"] == "blocked" {
+				reply(403, map[string]any{"decision": "deny", "reason": "memory_poisoning"})
+				return
+			}
+			reply(200, map[string]any{"record": map[string]any{"id": "mem_1", "source": req["source"]}})
+		case "/v1/memory/verify":
+			reply(200, map[string]any{"results": []any{map[string]any{"id": "mem_1", "status": "valid"}}})
+		case "/v1/rag/filter":
+			docs := req["documents"].([]any)
+			reply(200, map[string]any{"documents": docs[:1]})
+		case "/v1/rag/principals":
+			reply(200, map[string]any{"principals": []string{"user:lina", "group:finance"}})
+		case "/v1/a2a/envelope":
+			reply(200, map[string]any{"envelope": map[string]any{"to": req["to"], "ttl": req["ttl_seconds"]}})
+		case "/v1/a2a/verify":
+			reply(200, map[string]any{"valid": false, "reason": "replayed"})
+		}
+	}))
+	defer srv.Close()
+	c := New(srv.URL, StaticToken("tok"))
+	ctx := context.Background()
+	if id := c.NewSession(""); !strings.HasPrefix(id, "ses_") || c.SessionID != id || c.NewSession("ses_x") != "ses_x" {
+		t.Fatal("NewSession")
+	}
+	if out, err := c.DeclareIntent(ctx, "refund order 7", ""); err != nil || out["goal"] != "refund order 7" || out["session_id"] != "ses_x" {
+		t.Fatal(out, err)
+	}
+	if out, err := c.DeclareIntent(ctx, "again", ""); err != nil || out["goal"] != "first" {
+		t.Fatal("a second declaration returns the first goal", out, err)
+	}
+	if rec, err := c.MemoryWrite(ctx, "pref", "dark", "user", "chat"); err != nil || rec["id"] != "mem_1" {
+		t.Fatal(rec, err)
+	}
+	if _, err := c.MemoryWrite(ctx, "blocked", "x", "web", ""); !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "memory_poisoning") {
+		t.Fatal(err)
+	}
+	if res, err := c.MemoryVerify(ctx, []MemoryItem{{Record: map[string]any{"id": "mem_1"}, Value: "dark"}}); err != nil || len(res) != 1 || res[0]["status"] != "valid" {
+		t.Fatal(res, err)
+	}
+	docs := []map[string]any{{"source": "drive", "doc_id": "1"}, {"source": "drive", "doc_id": "2"}}
+	if kept, err := c.FilterDocuments(ctx, docs, "q"); err != nil || len(kept) != 1 || kept[0]["doc_id"] != "1" {
+		t.Fatal(kept, err)
+	}
+	if ps, err := c.RAGPrincipals(ctx); err != nil || len(ps) != 2 {
+		t.Fatal(ps, err)
+	}
+	if env, err := c.A2AEnvelope(ctx, "agt_b", map[string]any{"x": 1}, 0); err != nil || env["to"] != "agt_b" || env["ttl"] != float64(120) {
+		t.Fatal(env, err)
+	}
+	if _, err := c.A2AVerify(ctx, map[string]any{}, nil); !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "replayed") {
+		t.Fatal(err)
+	}
+	if u, err := c.ProxyURL(ctx, "http://agentguard-gateway:3128"); err != nil || u.String() != "http://agent:tok@agentguard-gateway:3128" {
+		t.Fatal(u, err)
+	}
+	if _, err := c.ProxyURL(ctx, "not a url"); err == nil {
+		t.Fatal("invalid proxy URL accepted")
 	}
 }
